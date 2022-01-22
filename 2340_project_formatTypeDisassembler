@@ -1,0 +1,398 @@
+.text	
+	start3:
+		j prepForLoop4
+	
+	loop4:
+		# check if end of array
+		lbu $t1, ($t0)
+		li $t4, 69
+		beq $t1, $t4, exitLoop4
+		
+		# check if syscall (0x0000000C = 12 in decimal)
+		beq $t1, 12, syscall_output
+		
+		# determine if r, j, or i format
+		
+		# isolate most significant 6 bits
+		lbu $t1, 3($t0)
+		srl $t1, $t1, 2
+		
+		# r-type check
+		beqz $t1, r_type_output			# check for 000000 opcode
+		
+		# j-type check
+		beq $t1, 2, j_type_output 	# check for j opcode
+		beq $t1, 3, j_type_output 	# check for jal opcode
+		
+		# i-type check
+		move $s2, $ra
+		jal i_type_output
+		move $ra, $s2
+		
+		# unrecognized opcode error message
+		addErrorMessage
+		addNewLine
+		
+		j finishLoop4Iteration
+		
+	finishLoop4Iteration:
+		# increment loop counter, refinedInputArray/asciiInputArray pointers, add new line, and clear temporary storage
+		addi $s0, $s0, 1
+		addi $s1, $s1, 8
+		addi $t0, $t0, 4
+		addNewLine
+		clearTemps
+		
+		j loop4
+	
+	syscall_output:
+		la $a0, syscallName
+		storeName
+		
+		j finishLoop4Iteration
+	
+	r_type_output:
+		# isolate funct code
+		lbu $t1, ($t0)
+		andi $t1, $t1, 63		# 63 = 0x3F
+		
+		# loop through r_funct_arr for funct code value
+		la $t3, r_funct_arr		# r_funct_arr pointer
+		li $t4, 0			# word pointer
+						# r_funct_arr starting byte indexes: 0, 4, 8, 12, etc.
+						# r_name arr starting byte indexes: 0, 8, 16, 24, etc.
+		la $t5, r_name_arr		# loop counter corresponding with matching values in r_name_arr
+		move $s2, $ra
+		jal loop10
+		move $ra, $s2
+		
+		# find and store name
+		la $t3, tempArray
+		lw $t1, ($t5)
+		sw $t1, ($t3)		# 1st half of name
+		addi $t5, $t5, 4
+		addi $t3, $t3, 4
+		lw $t1, ($t5)
+		sw $t1, ($t3)		# 2nd half
+		
+		la $a0, tempArray
+		storeName
+		addSpace
+		
+		# check if it's a shift instr
+		lbu $t1, ($t0)
+		andi $t1, $t1, 63
+		beq $t1, 0, shift_output
+		beq $t1, 2, shift_output
+		
+		# check if it's jr
+		beq $t1, 8, jr_output
+		
+		# isolate and store rd, rs, rt
+		isolateRd
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		addComma
+		addSpace
+		
+		isolateRs
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		addComma
+		addSpace
+		
+		isolateRt
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		
+		j finishLoop4Iteration
+	
+	loop10:
+		lw $t4, ($t3)
+		beq $t4, 69, noMatch
+		beq $t1, $t4, exit
+		addi $t3, $t3, 4
+		addi $t5, $t5, 8	# every word-spaced value in r_funct_arr matches to a 2-word-spaced value in r_name_arr
+		j loop10
+	
+	noMatch:
+		addErrorMessage
+		j finishLoop4Iteration
+		
+	shift_output:	# use shift amount (shamt)
+		isolateRd
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		addComma
+		addSpace
+		
+		isolateRt
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		addComma
+		addSpace
+		
+		# isolate and store shamt
+		lw $t1, ($t0)
+		srl $t1, $t1, 6
+		andi $t1, $t1, 31
+		sw $t1, tempArray
+		move $a0, $t1
+		convertHexToDecimal
+		convert2Bytes
+		la $a0, tempArray
+		li $a1, 2
+		storeNumber
+		
+		j finishLoop4Iteration
+	
+	jr_output:
+		isolateRs
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		
+		j finishLoop4Iteration
+	
+	j_type_output:
+		# store instruction name
+		move $s2, $ra
+		jal findJOpcode
+		move $ra, $s2
+		addSpace
+		
+		# add '0x'
+		li $t1, 48
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		li $t1, 120
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		
+		# isolate 26-bit address
+		lw $t1, ($t0)
+		andi $t1, $t1, 67108863		# 67108863 = 0x03FFFFFF
+		
+		# calculate target address
+		mul $t1, $t1, 4			# t1 = byte offset from 'current' address to target address
+		li $t4, 4194304			# 4194304 = 0x00400000, or the 'start' of the text segment
+		move $t5, $s0			# t5 = # of instructions from the 'start' to 'current' address (loop counter)
+		addi $t5, $t5, 1		# PC + 4
+		mul $t5, $t5, 4			# t5 = 'current' address's byte offset from the 'start'
+		add $t4, $t4, $t5		# t4 = 'current' instruction address ('start' + byte offset from 'start')
+		add $t1, $t1, $t4		# t1 = target address
+		
+		# temporarily store target address in tempArray
+		sw $t1, tempArray
+		convert4Bytes
+		
+		# load address from tempArray and store to outputArray
+		la $a0, tempArray
+		li $a1, 4
+		storeNumber
+		
+		j finishLoop4Iteration
+	
+	findJOpcode:
+		beq $t1, 3, storeJal
+		# falls off if j
+	
+	storeJ:
+		li $t1, 106			# 'j'
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		
+		j exit
+	
+	storeJal:
+		li $t1, 106			# 'j'
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		
+		li $t1, 97			# 'a'
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		
+		li $t1, 108			# 'l'
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		
+		j exit
+	
+	i_type_output:
+		# loop through i_opcode_arr for opcode name
+		la $t3, i_opcode_arr		# i_opcode_arr pointer
+		li $t4, 0			# word pointer
+		la $t5, i_name_arr		# loop counter corresponding with i_name_arr
+		move $s2, $ra
+		jal loop11
+		move $ra, $s2
+		
+		# find and store name
+		la $t3, tempArray
+		lw $t1, ($t5)
+		sw $t1, ($t3)		# 1st half of name
+		addi $t5, $t5, 4
+		addi $t3, $t3, 4
+		lw $t1, ($t5)
+		sw $t1, ($t3)		# 2nd half
+		
+		la $a0, tempArray
+		storeName
+		addSpace
+		
+		# check if it's a branch instr
+		lbu $t1, 3($t0)
+		srl $t1, $t1, 2
+		beq $t1, 4, branchOutput	# beq
+		beq $t1, 5, branchOutput	# bne
+		
+		# check if it's a load/store instr
+		beq $t1, 32, loadStoreOutput
+		beq $t1, 35, loadStoreOutput
+		beq $t1, 40, loadStoreOutput
+		beq $t1, 43, loadStoreOutput
+		
+		# isolate and store rt, rs
+		isolateRt
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		addComma
+		addSpace
+		
+		isolateRs
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		addComma
+		addSpace
+		
+		# add '0x'
+		li $t1, 48
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		li $t1, 120
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		
+		# isolate and store immediate
+		lw $t1, ($t0)
+		andi $t1, $t1, 65535		# 65535 = 0x0000FFFF
+		sw $t1, tempArray
+		convert2Bytes
+		la $a0, tempArray
+		li $a1, 2
+		storeNumber
+		
+		j finishLoop4Iteration
+	
+	loop11:
+		lw $t4, ($t3)
+		beq $t4, 69, noMatch
+		beq $t1, $t4, exit
+		addi $t3, $t3, 4
+		addi $t5, $t5, 8
+		j loop11
+	
+	branchOutput: # calculate target address distance in instructions
+		isolateRs
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		addComma
+		addSpace
+		
+		isolateRt
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		addComma
+		addSpace
+		
+		# isolate 16-bit address
+		lw $t1, ($t0)
+		andi $t1, $t1, 65535		# 65535 = 0x0000FFFF
+		addi $t1, $t1, 1		# t1 = number of words for forwards/backwards branching	w/ PC+4
+		
+		# +/- sign
+		move $s2, $ra
+		jal findPosOrNeg
+		move $ra, $s2
+		
+		# store value
+		# range is +32767 and -32768 instructions
+		sw $t1, tempArray
+		move $a0, $t1
+		convertHexToDecimal
+		convert5Bytes
+		la $a0, tempArray
+		li $a1, 5
+		storeNumber
+		
+		j finishLoop4Iteration
+	
+	findPosOrNeg:
+		bltz $t1, addMinusSign
+		# drops off if plus
+	
+	addPlusSign:
+		li $t3, 43
+		sb $t3, ($t2)
+		addi $t2, $t2, 1
+		j exit
+		
+	addMinusSign:
+		li $t3, 45
+		sb $t3, ($t2)
+		addi $t2, $t2, 1
+		j exit
+	
+	loadStoreOutput: # add parenthesis
+		isolateRt
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		addComma
+		addSpace
+		
+		lw $t1, ($t0)
+		andi $t1, $t1, 65535		# 65535 = 0x0000FFFF
+		sw $t1, tempArray
+		convert5Bytes
+		la $a0, tempArray
+		li $a1, 5
+		storeNumber
+		
+		# (
+		li $t1, 40
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		
+		isolateRs
+		addDollarSign
+		la $a0, tempArray
+		storeRegister
+		
+		# )
+		li $t1, 41
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		
+		j finishLoop4Iteration
+		
+	prepForLoop4:
+		la $t0, actualInputArray	# pointer array with each instruction stored as its actual value in 1 word
+		li $t1, 0			# byte manipulation register
+		la $t2, outputArray		# pointer to output array
+		li $s0, 0			# loop counter
+		la $s1, asciiInputArray		# counter that corresponds with the current instruction in ASCII
+		
+		jal loop4
+		
+	exitLoop4:

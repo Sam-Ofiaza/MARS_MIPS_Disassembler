@@ -1,0 +1,22 @@
+.data
+	outputFileName: .asciiz "output.asm"
+
+.text
+	# open file for writing
+	li $v0, 13
+	la $a0, outputFileName
+	li $a1, 1
+	syscall
+	move $s0, $v0
+	
+	# write to file
+	li $v0, 15
+	move $a0, $s0
+	la $a1, outputArray
+	la $a2, 4296
+	syscall
+	
+	# close and update file
+	li $v0, 16
+	move $a0, $s0
+	syscall

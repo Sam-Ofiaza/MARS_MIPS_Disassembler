@@ -1,0 +1,366 @@
+.data
+	tempArray: .space 16		# used to temporarily store isolated values for adding to outputArray
+	tempWords: .space 8		# temporary 2-word storage
+	.align 2
+	
+	errorMessage: .asciiz "ERROR:"
+	unrecognizedMessage: .asciiz "Unrecognized"
+	opcodeMessage: .asciiz "opcode:"
+	atMessage: .asciiz "at"
+	lineMessage: .asciiz "line"
+
+.text
+	.macro clearTemps
+	# clears tempWords and tempArray
+	# changes t1, t3, t4
+	la $t1, tempWords
+	la $t3, tempArray
+	li $t4, 0
+	sw $t4, ($t1)
+	sw $t4, ($t3)
+	addi $t1, $t1, 4
+	addi $t3, $t3, 4
+	sw $t4, ($t1)
+	sw $t4, ($t3)
+	.end_macro
+	
+	.macro storeName
+	# copies name from a0's address to outputArray leaving t2 as the next available byte in outputArray
+	# expects a0 address, changes t1, a0
+	li $t1, 0	# current byte holder
+	loop5:
+		lbu $t1, ($a0)
+		beq $t1, 32, exitLoop5	# stop at the next space
+		beqz $t1, exitLoop5	# or stop at the null-termination
+		sb $t1, ($t2)
+		addi $a0, $a0, 1
+		addi $t2, $t2, 1
+		j loop5
+	
+	exitLoop5:
+	.end_macro
+	
+	.macro findNumUsedBytes
+	# takes value in a0, finds the number of bytes occupied by its value, and stores it in v0
+	# expects a0 value, changes a0, a1, v0
+	li $a1, 0
+	
+	loop6:
+		bltz $a0, exitLoop6	# check if < 0
+		blt $a0, 256, lastByte	# check if < 256
+		addi $a1, $a1, 1	# value still has at least 1 more byte used
+		div $a0, $a0, 255	# remove least significant byte
+		j loop6
+		
+	lastByte:
+		addi $a1, $a1, 1
+	
+	exitLoop6:
+		move $v0, $a1
+	.end_macro
+	
+	.macro convert4Bytes # to big-endian
+	# calculated numerical input is stored little-endian (MSB last), the storeNumber macro requires big-endian array manipulation
+	# convert to tempArray value to big-endian
+	lw $t1, tempArray	# current tempArray = 0x40212401 (example)
+				# we want tempArray = 0x01242140
+	sw $t1, tempWords	# tempWords = 0x01242140 from t1 = 0x01242140
+	la $t1, tempWords
+	la $t3, tempArray
+	lbu $t4, ($t1)		# t4 = 40
+	sb $t4, 3($t3)		# tempArray = 0x00000040
+	lbu $t4, 1($t1)		# t4 = 21
+	sb $t4, 2($t3)		# tempArray = 0x00002140
+	lbu $t4, 2($t1)		# t4 = 24
+	sb $t4, 1($t3)		# tempArray = 0x00242140
+	lbu $t4, 3($t1)		# t4 = 01
+	sb $t4, ($t3)		# tempArray = 0x01242140
+	.end_macro
+	
+	.macro convert2Bytes # to big-endian
+	lw $t1, tempArray
+	sw $t1, tempWords	# tempWords = 0x00000143 (example)
+	la $t1, tempWords
+	la $t3, tempArray
+	lbu $t4, ($t1)		# t4 = 43
+	sb $t4, 1($t3)		# tempArray = 0x00004300
+	lbu $t4, 1($t1)		# t4 = 01
+	sb $t4, ($t3)		# tempArray = 0x00004301
+	.end_macro
+	
+	.macro convert5Bytes
+	# copy of convert4Bytes modified for 5
+	lw $t1, tempArray	# current tempArray = 0x0040212401 (example)
+				# we want tempArray = 0x0124214000
+	sw $t1, tempWords	# tempWords = 0x0124214000 from t1 = 0x0124214000
+	la $t1, tempWords
+	la $t3, tempArray
+	lbu $t4, ($t1)		# t4 = 00
+	sb $t4, 4($t3)		# tempArray = 0x0000000000
+	lbu $t4, 1($t1)		# t4 = 40
+	sb $t4, 3($t3)		# tempArray = 0x0000004000
+	lbu $t4, 2($t1)		# t4 = 21
+	sb $t4, 2($t3)		# tempArray = 0x0004214000
+	lbu $t4, 3($t1)		# t4 = 24
+	sb $t4, 1($t3)		# tempArray = 0x00024214000
+	lbu $t4, 4($t1)		# t4 = 01
+	sb $t4, ($t3)		# tempArray = 0x01024214000
+	
+	.end_macro
+	
+	.macro storeNumber
+	# copies a0's address in tempArray, splits it into decimal bytes, converts it to ASCII, 
+	# then copies it to outputArray, leaving t2 as the address of the next available byte in outputArray
+	# expects value from a0 address in big-endian and a1 should have the number of bytes used to store the number
+	#changes t1, t3, t4, t5, t6, and t7
+	
+	# copy tempArray into tempWords and overwrite tempArray
+	la $t3, tempArray
+	la $t4, tempWords
+	lw $t1, ($t3)
+	sw $t1, ($t4)
+	addi $t3, $t3, 4
+	addi $t4, $t4, 4
+	lw $t1, ($t3)
+	sw $t1, ($t4)
+	
+	lw $t1, tempArray
+	li $t3, 0		# loop counter
+	la $t4, tempWords	# tempWords pointer
+	li $t5, 0		# first byte holder
+	li $t6, 0		# second byte holder
+	li $t7, 16		# constant for mul/div
+	
+	loop7: # split value into decimal bytes
+		beq $t3, $a1, exitLoop7	# stop after a1 bytes in tempWords
+		lbu $t1, ($t4)
+		div $t5, $t1, $t7	# t5 = first byte
+		mul $t6, $t5, $t7
+		sub $t6, $t1, $t6	# t6 = second byte
+		sb $t5, ($a0)		# store to tempArray
+		addi $a0, $a0, 1
+		sb $t6, ($a0)		# store to tempArray
+		addi $a0, $a0, 1
+		addi $t4, $t4, 1
+		addi $t3, $t3, 1
+		j loop7
+	
+	exitLoop7:
+		# reset registers, prepare for loop 8
+		mul $a1, $a1, 2		# next 2 loops should end at twice the number of original bytes
+		la $a0, tempArray
+		li $t3, 0	# loop counter
+		li $t4, 0	# slt comparison value
+		li $t5, 10	# constant comparison value
+	
+	loop8:	# convert to ASCII
+		beq $t3, $a1, exitLoop8
+		lbu $t1, ($a0)
+		slt $t4, $t1, $t5	# t4 = 1 if number, 0 if letter
+		beq $t4, 1, numberConversion
+		beq $t4, 0, letterConversion
+		# branches no matter what
+	
+	numberConversion: 	# converts a decimal number from 0 to 9 (0-9) to its corresponding ASCII decimal value (48-57)
+				# and replaces the old value in tempArray to the new one
+		addi $t1, $t1, 48
+		sb $t1, ($a0)
+		addi $a0, $a0, 1
+		addi $t3, $t3, 1
+		j loop8
+	
+	letterConversion: 	# converts a decimal number from 10 to 15 (A-F) to its corresponding ASCII decimal value (65-70)
+				# and replaces the old value in tempArray to the new one
+		addi $t1, $t1, 55
+		sb $t1, ($a0)
+		addi $a0, $a0, 1
+		addi $t3, $t3, 1
+		j loop8
+	
+	exitLoop8:
+		# reset registers and prepare for loop 9
+		la $a0, tempArray
+		li $t3, 0	# loop counter
+	
+	loop9: # copy to output array
+		beq $t3, $a1, exitLoop9
+		lbu $t1, ($a0)
+		sb $t1, ($t2)
+		addi $a0, $a0, 1	# increment tempArray pointer
+		addi $t2, $t2, 1	# increment outputArray pointer
+		addi $t3, $t3, 1	# increment counter
+		j loop9
+	
+	exitLoop9:
+	.end_macro
+	
+	.macro convertHexToDecimal
+	# takes in word-sized value with a0, stores result in tempArray
+	# changes t1, t3, t4, t5, t6, t7
+	
+	clearTemps
+	
+	la $t1, tempWords
+	la $t3, tempArray
+	sw $a0, ($t1)
+	move $t1, $a0
+	li $t4, 10	# constant for div
+	li $t5, 0	# division remainder container
+	
+	loop5:	# convert to decimal bytes
+		beqz $t1, exitLoop5
+		bltz $t1, exitLoop5
+		div $t1, $t1, $t4
+		mfhi $t5
+		sb $t5, ($t3)
+		addi $t3, $t3, 1
+		j loop5
+	
+	exitLoop5:
+		li $t1, 0		# byte manipulation register
+		li $t3, 0		# second manipulation reg
+		la $t4, tempArray	# pointer for loading bytes
+		la $t5, tempArray	# pointer for storing
+		li $t6, 16		# constant for mul
+		li $t7, 0		# counter
+		
+	loop6:	# remove spaces in place
+		beq $t7, 8, exitLoop6
+		lbu $t1, 1($t4)
+		lbu $t3, ($t4)
+		mul $t1, $t1, $t6
+		add $t1, $t1, $t3
+		sb $t1, ($t5)
+		addi $t4, $t4, 2
+		addi $t5, $t5, 1
+		addi $t7, $t7, 1
+		j loop6
+		
+	exitLoop6:
+	.end_macro
+	
+	.macro isolateRs
+	# isolates rs and stores it in both tempArray and v0
+	# changes t1
+	lw $t1, ($t0)
+	srl $t1, $t1, 21
+	andi $t1, $t1, 31		# 31 = 0x1F
+	sw $t1, tempArray
+	move $v0, $t1
+	.end_macro
+	
+	.macro isolateRt
+	lw $t1, ($t0)
+	srl $t1, $t1, 16
+	andi $t1, $t1, 31
+	sw $t1, tempArray
+	move $v0, $t1
+	.end_macro
+	
+	.macro isolateRd
+	lbu $t1, 1($t0)
+	srl $t1, $t1, 3
+	andi $t1, $t1, 31
+	sw $t1, tempArray
+	move $v0, $t1
+	.end_macro
+	
+	.macro storeRegister
+	# stores an address from a0 of a 5-bit value in outputArray
+	# expects a0 address, changes t1, t3, t4, t5
+	
+	# convert to ASCII
+	lw $t1, ($a0)
+	li $t3, 10
+	slt $t4, $t1, $t3		# if < 10, only 1 digit
+	beq $t4, 1, singleDigitConversion
+	beqz $t4, doubleDigitConversion
+	
+	singleDigitConversion:
+		addi $t1, $t1, 48
+		# copy to outpuArray
+		sb $t1, ($t2)
+		addi $t2, $t2, 1
+		j endMacro
+	
+	doubleDigitConversion:
+		div $t1, $t3
+		mflo $t3	# first digit
+		mfhi $t4	# second
+		addi $t3, $t3, 48
+		addi $t4, $t4, 48
+		# copy to outputArray
+		sb $t3, ($t2)
+		addi $t2, $t2, 1
+		sb $t4, ($t2)
+		addi $t2, $t2, 1
+		# will fall off
+	
+	endMacro:
+	.end_macro
+	
+	.macro addErrorMessage
+	# changes a0, a1
+	la $a0, errorMessage
+	storeName		# "ERROR:"
+	addSpace
+	la $a0, unrecognizedMessage
+	storeName		# "unrecognized"
+	addSpace
+	la $a0, opcodeMessage
+	storeName		# "opcode:"
+	addSpace
+	la $a0, tempArray
+	lw $a1, ($s1)
+	sw $a1, ($a0)		# 1st half
+	lw $a1, 4($s1)
+	sw $a1, 4($a0)		# 2nd half
+	addi $a0, $a0, 8
+	li $a1, 0
+	sb $a1, ($a0)		# add null termination
+	la $a0, tempArray
+	storeName		# full ASCII value of invalid instruction
+	addSpace
+	la $a0, atMessage
+	storeName		# "at"
+	addSpace
+	la $a0, lineMessage
+	storeName		# "line"
+	addSpace
+	move $a1, $s0
+	addi $a1, $a1, 1	# change starting index to 1 for humans
+	sw $a1, tempArray		# line number
+	move $a0, $a1
+	convertHexToDecimal
+	convert2Bytes
+	la $a0, tempArray
+	li $a1, 2
+	storeNumber
+	addi $t2, $t2, 1
+	.end_macro
+	
+	.macro addSpace
+	# takes the byte at t2's current address and adds a space, leaving t2 at the byte after the space
+	# changes t1
+	li $t1, 32
+	sb $t1, ($t2)
+	addi $t2, $t2, 1
+	.end_macro
+	
+	.macro addComma
+	li $t1, 44
+	sb $t1, ($t2)
+	addi $t2, $t2, 1
+	.end_macro
+	
+	.macro addDollarSign
+	li $t1, 36
+	sb $t1, ($t2)
+	addi $t2, $t2, 1
+	.end_macro
+	
+	.macro addNewLine
+	li $t1, '\n'
+	sb $t1, ($t2)
+	addi $t2, $t2, 1
+	.end_macro

@@ -1,0 +1,106 @@
+.data
+	# (1024 characters) / (9 characters per encoded instruction) = 113 possible instructions
+	# (113 instructions * (2 word or 8 byte storage per instruction) = 904 max bytes for actualInputArray
+	# 904 max bytes are shortened to 452 max bytes in refinedInputArray
+	asciiInputArray: .space 1024		# 0x24020004 -> 0x3234303230303034 (ASCII character values)
+	byteInputArray: .space 1024		# 0x24020004 -> 0x0204000200000004 (Decimal byte values)
+	actualInputArray: .space 1024		# 0x24020004 -> 0x24020004 (52360000 decimal when converted byte-by-byte)
+	.align 2
+	
+.text
+	start2:
+		j prepForLoop1
+	
+	loop1:
+		lbu $t2, ($t0)
+		beqz $t2, exit	 # stop at null-termination
+		beq $t2, '\n', skipNewLine
+		beq $t2, $t3, skipNewLine
+		sb $t2, ($t1)
+		addi $t0, $t0, 1
+		addi $t1, $t1, 1
+		j loop1
+		
+	skipNewLine:
+		addi $t0, $t0, 1
+		j loop1
+		
+	loop2:
+		lbu $t2, ($t0)
+		beqz $t2, exit		# stops at null-termination
+		# determine if byte is a number or letter
+		slti $t3, $t2, 58	# t3 = 1 if number, 0 if letter
+		beqz $t3, convertLetter
+		j convertNumber
+		
+	convertNumber:
+		addi $t2, $t2, -48
+		sb $t2, ($t1)
+		addi $t0, $t0, 1
+		addi $t1, $t1, 1
+		j loop2
+	
+	convertLetter:
+		addi $t2, $t2, -55
+		sb $t2, ($t1)
+		addi $t0, $t0, 1
+		addi $t1, $t1, 1
+		j loop2
+		
+	loop3:
+		blt $t0, $s0, resetBytePointer
+		lbu $t3, ($t0)
+		addi $t0, $t0, -1
+		lbu $t2, ($t0)
+		# convert to hex and store as 1 byte
+		mul $t2, $t2, 16
+		add $t2, $t2, $t3
+		sb $t2, ($t1)
+		addi $t1, $t1, 1
+		addi $t0, $t0, -1
+		addi $t4, $t4, 2
+		j loop3
+	
+	resetBytePointer: # check condition, move to the next word, set reset pointer, prepare to decrease
+		lbu $t2, ($t4)
+		beq $t2, 69, exit	# stop at pre-defined constant
+		addi $t0, $t0, 9
+		la $s0, ($t0)
+		addi $t0, $t0, 7
+		j loop3
+	
+	prepForLoop1:
+		# initialize input array in ASCII
+		la $t0, fileWords
+		la $t1, asciiInputArray
+		li $t2, 0 	# fileWords current byte holder
+		li $t3, 13	# ASCII decimal value for carriage return
+		lbu $t2, ($t0)
+		jal loop1
+		
+	prepForLoop2:
+		# convert ASCII input array to decimal input array
+		la $t0, asciiInputArray
+		la $t1, byteInputArray
+		li $t2, 0	# rawInputArray current byte holder
+		li $t3, 0	# number or letter value holder
+		
+		jal loop2
+		
+		li $t0, 69
+		sb $t0, ($t1)	# serves as a stopping point for future loops
+		
+	prepForLoop3:
+		# remove spaces between bytes, reverse the order, and convert to hex
+		la $t0, byteInputArray
+		la $s0, byteInputArray	# second byteInputArray pointer to mark reset point
+		addi $t0, $t0, 7	# sample byte order: (0-0-0-0-0-0-0-0); traverses: (7-8-5-6-3-4-1-2)
+		la $t1, actualInputArray
+		li $t2, 0	# first byte holder for multiplication
+		li $t3, 0	# second byte holder for adding to t2
+		la $t4, byteInputArray	# third byteInputArray pointer, increments normally (1-2-3-4-5-6-7-8)
+		
+		jal loop3
+		
+		li $t0, 69
+		sb $t0, ($t1)	# serves as a stopping point for future loops
